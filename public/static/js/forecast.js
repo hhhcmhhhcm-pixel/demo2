@@ -297,6 +297,28 @@
       if (currentDeal) renderFcChart(ensureForecastState(currentDeal));
     }
 
+    function buildSelfData(state, rangeMonths) {
+      let selfData = [];
+      if (state.selfMode === 'monthly' && state.selfMonthly) {
+        const currentYear = new Date().getFullYear();
+        for (let i = 0; i < rangeMonths; i++) {
+          const y = String(currentYear + Math.floor(i / 12));
+          const m = i % 12;
+          const arr = state.selfMonthly[y];
+          selfData.push((arr && arr[m] > 0) ? arr[m] : 0);
+        }
+      } else if (state.selfMode === 'yearly' && state.selfYearly) {
+        const currentYear = new Date().getFullYear();
+        for (let i = 0; i < rangeMonths; i++) {
+          const y = String(currentYear + Math.floor(i / 12));
+          selfData.push(state.selfYearly[y] || 0);
+        }
+      } else if (state.selfQuickValue && state.selfQuickValue > 0) {
+        selfData = new Array(rangeMonths).fill(state.selfQuickValue);
+      }
+      return selfData;
+    }
+
     function renderFcChart(state) {
       const container = document.getElementById('fcChartContainer');
       if (!container || !state) return;
@@ -304,79 +326,116 @@
       const rangeMonths = fcChartRange === '1y' ? 12 : fcChartRange === '3y' ? 36 : 120;
       const sysData = state.systemMonthly.slice(0, rangeMonths);
       const borData = state.borrowerMonthly.slice(0, Math.min(rangeMonths, 36));
+      const selfData = buildSelfData(state, rangeMonths);
+      const hasSelf = selfData.some(v => v > 0);
 
-      // Build self data array based on mode
-      let selfData = [];
-      if (state.selfQuickValue && state.selfQuickValue > 0) {
-        selfData = new Array(rangeMonths).fill(state.selfQuickValue);
-      }
-      if (state.selfMode === 'monthly' && state.selfMonthly) {
-        const currentYear = new Date().getFullYear();
-        selfData = [];
-        for (let i = 0; i < rangeMonths; i++) {
-          const y = String(currentYear + Math.floor(i / 12));
-          const m = i % 12;
-          const arr = state.selfMonthly[y];
-          selfData.push((arr && arr[m] > 0) ? arr[m] : 0);
-        }
-      }
-      if (state.selfMode === 'yearly' && state.selfYearly) {
-        const currentYear = new Date().getFullYear();
-        selfData = [];
-        for (let i = 0; i < rangeMonths; i++) {
-          const y = String(currentYear + Math.floor(i / 12));
-          selfData.push(state.selfYearly[y] || 0);
-        }
-      }
+      // Find max/min for scaling
+      const allVals = [...sysData, ...borData, ...(hasSelf ? selfData : [])].filter(v => v > 0);
+      const maxVal = allVals.length > 0 ? Math.max(...allVals) * 1.08 : 100;
+      const minVal = allVals.length > 0 ? Math.min(...allVals) * 0.92 : 0;
+      const valRange = maxVal - minVal || 1;
 
-      // Find max value for scaling
-      const allVals = [...sysData, ...borData, ...selfData].filter(v => v > 0);
-      const maxVal = allVals.length > 0 ? Math.max(...allVals) : 100;
-      const chartH = 160;
+      // SVG dimensions — use wide viewBox for proper aspect ratio
+      const svgW = 800;
+      const svgH = 180;
+      const padL = 50; // left padding for Y-axis labels
+      const padR = 10;
+      const padT = 10;
+      const padB = 30; // bottom padding for X-axis labels
+      const plotW = svgW - padL - padR;
+      const plotH = svgH - padT - padB;
 
-      // Render as SVG polylines
-      const w = 100; // viewBox width percentage
-      const stepX = rangeMonths > 1 ? w / (rangeMonths - 1) : w;
+      function toX(i, total) { return padL + (total > 1 ? (i / (total - 1)) * plotW : plotW / 2); }
+      function toY(v) { return padT + plotH - ((v - minVal) / valRange) * plotH; }
 
-      function polyline(data, color, dashed) {
+      function polyline(data, color) {
         if (!data || data.length === 0) return '';
-        const points = data.map((v, i) => {
-          const x = (i * stepX).toFixed(2);
-          const y = (chartH - (v / maxVal) * (chartH - 20) - 10).toFixed(2);
-          return x + ',' + y;
-        }).join(' ');
-        return '<polyline points="' + points + '" fill="none" stroke="' + color + '" stroke-width="1.5"' +
-          (dashed ? ' stroke-dasharray="4,3"' : '') + ' />';
+        const pts = data.map((v, i) => toX(i, data.length).toFixed(1) + ',' + toY(v).toFixed(1)).join(' ');
+        return '<polyline points="' + pts + '" fill="none" stroke="' + color + '" stroke-width="2" stroke-linejoin="round" />';
+      }
+
+      // Y-axis grid lines + labels (5 ticks)
+      let gridAndYLabels = '';
+      for (let t = 0; t <= 4; t++) {
+        const val = minVal + (valRange * t / 4);
+        const y = toY(val).toFixed(1);
+        gridAndYLabels +=
+          '<line x1="' + padL + '" y1="' + y + '" x2="' + (svgW - padR) + '" y2="' + y + '" stroke="#e5e7eb" stroke-width="0.5" />' +
+          '<text x="' + (padL - 6) + '" y="' + (parseFloat(y) + 4) + '" font-size="11" fill="#9ca3af" text-anchor="end" font-family="Inter,sans-serif">' + val.toFixed(0) + '</text>';
       }
 
       // X-axis labels
-      let labels = '';
+      let xLabels = '';
       const currentYear = new Date().getFullYear();
+      const labelPositions = [];
+
       if (rangeMonths <= 12) {
-        for (let i = 0; i < 12; i += 2) {
-          const x = (i * stepX).toFixed(2);
-          labels += '<text x="' + x + '" y="' + (chartH - 1) + '" font-size="3" fill="#9ca3af" text-anchor="middle">' + (i + 1) + '月</text>';
+        for (let i = 0; i < 12; i += 1) {
+          labelPositions.push({ i: i, label: (i + 1) + '月' });
         }
       } else if (rangeMonths <= 36) {
-        for (let i = 0; i < 36; i += 6) {
-          const x = (i * stepX).toFixed(2);
+        for (let i = 0; i < 36; i += 3) {
           const yr = currentYear + Math.floor(i / 12);
-          labels += '<text x="' + x + '" y="' + (chartH - 1) + '" font-size="3" fill="#9ca3af" text-anchor="middle">' + yr + '/' + (i % 12 + 1) + '</text>';
+          labelPositions.push({ i: i, label: yr + '/' + (i % 12 + 1) });
         }
       } else {
         for (let i = 0; i < 120; i += 12) {
-          const x = (i * stepX).toFixed(2);
-          labels += '<text x="' + x + '" y="' + (chartH - 1) + '" font-size="3" fill="#9ca3af" text-anchor="middle">' + (currentYear + i / 12) + '</text>';
+          labelPositions.push({ i: i, label: String(currentYear + i / 12) });
         }
       }
 
+      labelPositions.forEach(lp => {
+        const x = toX(lp.i, rangeMonths).toFixed(1);
+        xLabels += '<text x="' + x + '" y="' + (svgH - 6) + '" font-size="11" fill="#9ca3af" text-anchor="middle" font-family="Inter,sans-serif">' + lp.label + '</text>';
+      });
+
+      // Hover tooltip area (invisible rects for each data point)
+      let tooltipAreas = '';
+      const barW = Math.max(4, plotW / rangeMonths);
+      for (let i = 0; i < rangeMonths; i++) {
+        const x = toX(i, rangeMonths) - barW / 2;
+        const sysVal = sysData[i] !== undefined ? sysData[i].toFixed(1) : '--';
+        const borVal = i < borData.length ? borData[i].toFixed(1) : '--';
+        const selfVal = (hasSelf && selfData[i] > 0) ? selfData[i].toFixed(1) : '--';
+        tooltipAreas +=
+          '<rect x="' + x.toFixed(1) + '" y="' + padT + '" width="' + barW.toFixed(1) + '" height="' + plotH + '" fill="transparent" class="fc-hover-rect"' +
+          ' data-sys="' + sysVal + '" data-bor="' + borVal + '" data-self="' + selfVal + '" />';
+      }
+
       container.innerHTML =
-        '<svg viewBox="0 0 ' + w + ' ' + chartH + '" preserveAspectRatio="none" class="w-full h-full">' +
-          polyline(sysData, '#14b8a6', false) +
-          polyline(borData, '#0ea5e9', false) +
-          polyline(selfData.filter(v => v > 0).length > 0 ? selfData : [], '#f59e0b', false) +
-          labels +
-        '</svg>';
+        '<svg viewBox="0 0 ' + svgW + ' ' + svgH + '" class="w-full h-full" style="overflow:visible;">' +
+          gridAndYLabels +
+          polyline(sysData, '#14b8a6') +
+          polyline(borData, '#0ea5e9') +
+          (hasSelf ? polyline(selfData.filter(v => v > 0).length === selfData.length ? selfData : selfData.map(v => v > 0 ? v : null).filter(v => v), '#f59e0b') : '') +
+          xLabels +
+          tooltipAreas +
+        '</svg>' +
+        '<div id="fcTooltip" class="hidden absolute bg-gray-800 text-white text-[10px] rounded-lg px-2 py-1.5 pointer-events-none shadow-lg z-10" style="white-space:nowrap;"></div>';
+
+      // Add hover listeners
+      container.querySelectorAll('.fc-hover-rect').forEach(rect => {
+        rect.addEventListener('mouseenter', function(e) {
+          const tip = document.getElementById('fcTooltip');
+          if (!tip) return;
+          tip.innerHTML =
+            '<span style="color:#5eead4;">系统: ' + this.dataset.sys + '万</span><br>' +
+            '<span style="color:#7dd3fc;">融资方: ' + this.dataset.bor + '万</span><br>' +
+            '<span style="color:#fcd34d;">自填: ' + this.dataset.self + '万</span>';
+          tip.classList.remove('hidden');
+        });
+        rect.addEventListener('mousemove', function(e) {
+          const tip = document.getElementById('fcTooltip');
+          if (!tip) return;
+          const rect = container.getBoundingClientRect();
+          tip.style.left = (e.clientX - rect.left + 12) + 'px';
+          tip.style.top = (e.clientY - rect.top - 10) + 'px';
+        });
+        rect.addEventListener('mouseleave', function() {
+          const tip = document.getElementById('fcTooltip');
+          if (tip) tip.classList.add('hidden');
+        });
+      });
     }
 
     // ---- Selected status ----
