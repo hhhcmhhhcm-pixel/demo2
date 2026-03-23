@@ -725,6 +725,12 @@ app.get('/', (c) => {
               <div id="negInviteBox" class="p-2.5 rounded-lg bg-gray-50 border border-gray-100 text-xs text-gray-500">尚未生成邀请链接。</div>
             </div>
           </div>
+
+          <div class="bg-white rounded-2xl border border-gray-100 p-5">
+            <h3 class="text-base font-bold text-gray-900 mb-3"><i class="fas fa-file-export mr-2 text-cyan-600"></i>合约通输出预览</h3>
+            <pre id="negContractPayloadBox" class="p-3 rounded-xl bg-gray-50 border border-gray-100 text-[11px] leading-5 text-gray-600 whitespace-pre-wrap">尚未达成条款，暂无输出。</pre>
+            <p class="text-[11px] text-gray-400 mt-2">约束：仅公共参数会流向合约通，私有预测与派生指标不会外传。</p>
+          </div>
         </div>
       </div>
     </div>
@@ -806,6 +812,7 @@ app.get('/', (c) => {
     let intentByDeal = {}; // 表达意向（按项目存储）
     let negotiationByDeal = {}; // 谈判状态（按项目存储）
     let timelineByDeal = {}; // 时间线事件（按项目存储）
+    let contractPayloadByDeal = {}; // 流向合约通的公共参数快照
     let obStep = 0;
 
     const INDUSTRY_COMPARABLES = {
@@ -1276,6 +1283,10 @@ app.get('/', (c) => {
       localStorage.setItem('ec_timelineByDeal', JSON.stringify(timelineByDeal));
     }
 
+    function saveContractPayloadState() {
+      localStorage.setItem('ec_contractPayloadByDeal', JSON.stringify(contractPayloadByDeal));
+    }
+
     function getPublicTermsFromWorkbench() {
       const state = ensureWorkbenchState();
       if (!state) return null;
@@ -1442,6 +1453,12 @@ app.get('/', (c) => {
         if (state.invite) invite.textContent = '链接：' + state.invite.link + '（角色：' + (state.invite.role === 'negotiator' ? '谈判者' : '观察者') + '，有效期至 ' + state.invite.expiresAt.slice(0, 10) + '）';
         else invite.textContent = '尚未生成邀请链接。';
       }
+
+      const payloadBox = document.getElementById('negContractPayloadBox');
+      if (payloadBox) {
+        const payload = contractPayloadByDeal[currentDeal.id];
+        payloadBox.textContent = payload ? JSON.stringify(payload, null, 2) : '尚未达成条款，暂无输出。';
+      }
     }
 
     function saveNegotiationDraft(slot) {
@@ -1584,10 +1601,23 @@ app.get('/', (c) => {
       const original = allDeals.find(d => d.id === currentDeal.id);
       if (original) original.status = 'confirmed';
       localStorage.setItem('ec_allDeals', JSON.stringify(allDeals));
+      contractPayloadByDeal[currentDeal.id] = {
+        dealId: currentDeal.id,
+        projectName: currentDeal.name,
+        sourceProposalId: proposal.id,
+        confirmedAt: new Date().toISOString(),
+        publicTerms: {
+          amountWan: Number(proposal.terms.amountWan),
+          sharePct: Number(proposal.terms.sharePct),
+          aprPct: Number(proposal.terms.aprPct),
+          termMonths: Number(proposal.terms.termMonths)
+        }
+      };
+      saveContractPayloadState();
       saveNegotiationState();
       pushTimelineEvent('terms_confirmed', '提案 ' + proposal.id + ' 已达成并锁定公共条款', proposal.terms);
       renderNegotiationTab();
-      showToast('success', '条款已达成', '项目状态已更新为已确认');
+      showToast('success', '条款已达成', '项目状态已更新为已确认，且已生成合约通公共参数输出');
     }
 
     function submitNegotiationMemo(status) {
@@ -2667,6 +2697,8 @@ app.get('/', (c) => {
       if (savedNegotiation) { try { negotiationByDeal = JSON.parse(savedNegotiation); } catch(e) {} }
       const savedTimeline = localStorage.getItem('ec_timelineByDeal');
       if (savedTimeline) { try { timelineByDeal = JSON.parse(savedTimeline); } catch(e) {} }
+      const savedContractPayload = localStorage.getItem('ec_contractPayloadByDeal');
+      if (savedContractPayload) { try { contractPayloadByDeal = JSON.parse(savedContractPayload); } catch(e) {} }
     }
 
     document.addEventListener('DOMContentLoaded', initApp);
